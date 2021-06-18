@@ -113,6 +113,7 @@ class BotAI(DistanceCalculation):
         self._structures_previous_map: Dict[int, Unit] = dict()
         self._enemy_units_previous_map: Dict[int, Unit] = dict()
         self._enemy_structures_previous_map: Dict[int, Unit] = dict()
+        self._all_units_previous_map: Dict[int, Unit] = dict()
         self._previous_upgrades: Set[UpgradeId] = set()
         self._expansion_positions_list: List[Point2] = []
         self._resource_location_to_expansion_position_dict: Dict[Point2, Point2] = {}
@@ -695,19 +696,8 @@ class BotAI(DistanceCalculation):
                 elif item_id == UnitTypeId.ARCHON:
                     return self.calculate_unit_value(UnitTypeId.ARCHON)
             unit_data = self._game_data.units[item_id.value]
-            # Cost of structure morphs is automatically correctly calculated by 'calculate_ability_cost'
-            cost = self._game_data.calculate_ability_cost(unit_data.creation_ability)
-            # Fix non-structure morph cost: check if is morph, then subtract the original cost
-            unit_supply_cost = unit_data._proto.food_required
-            if unit_supply_cost > 0 and item_id in UNIT_TRAINED_FROM and len(UNIT_TRAINED_FROM[item_id]) == 1:
-                for producer in UNIT_TRAINED_FROM[item_id]:  # type: UnitTypeId
-                    producer_unit_data = self.game_data.units[producer.value]
-                    if 0 < producer_unit_data._proto.food_required <= unit_supply_cost:
-                        if producer == UnitTypeId.ZERGLING:
-                            producer_cost = Cost(25, 0)
-                        else:
-                            producer_cost = self.game_data.calculate_ability_cost(producer_unit_data.creation_ability)
-                        cost = cost - producer_cost
+            # Cost of morphs is automatically correctly calculated by 'calculate_ability_cost'
+            return self._game_data.calculate_ability_cost(unit_data.creation_ability)
 
         elif isinstance(item_id, UpgradeId):
             cost = self._game_data.upgrades[item_id.value].cost
@@ -1678,6 +1668,7 @@ class BotAI(DistanceCalculation):
         self._enemy_structures_previous_map: Dict[int, Unit] = {
             structure.tag: structure for structure in self.enemy_structures
         }
+        self._all_units_previous_map: Dict[int, Unit] = {unit.tag: unit for unit in self.all_units}
 
         self._prepare_units()
         self.minerals: int = state.common.minerals
@@ -1915,19 +1906,17 @@ class BotAI(DistanceCalculation):
                 await self.on_enemy_unit_entered_vision(enemy_structure)
 
         # Call events for enemy unit left vision
-        if self.enemy_units:
-            visible_enemy_units = self.enemy_units.tags
-            for enemy_unit_tag in self._enemy_units_previous_map.keys():
-                if enemy_unit_tag not in visible_enemy_units:
-                    await self.on_enemy_unit_left_vision(enemy_unit_tag)
-        if self.enemy_structures:
-            visible_enemy_structures = self.enemy_structures.tags
-            for enemy_structure_tag in self._enemy_structures_previous_map.keys():
-                if enemy_structure_tag not in visible_enemy_structures:
-                    await self.on_enemy_unit_left_vision(enemy_structure_tag)
+        enemy_units_left_vision: Set[int] = set(self._enemy_units_previous_map.keys()) - self.enemy_units.tags
+        for enemy_unit_tag in enemy_units_left_vision:
+            await self.on_enemy_unit_left_vision(enemy_unit_tag)
+        enemy_structures_left_vision: Set[int] = (
+            set(self._enemy_structures_previous_map.keys()) - self.enemy_structures.tags
+        )
+        for enemy_structure_tag in enemy_structures_left_vision:
+            await self.on_enemy_unit_left_vision(enemy_structure_tag)
 
     async def _issue_unit_dead_events(self):
-        for unit_tag in self.state.dead_units:
+        for unit_tag in self.state.dead_units & set(self._all_units_previous_map.keys()):
             await self.on_unit_destroyed(unit_tag)
 
     async def on_unit_destroyed(self, unit_tag: int):
@@ -1935,7 +1924,7 @@ class BotAI(DistanceCalculation):
         Override this in your bot class.
         Note that this function uses unit tags and not the unit objects
         because the unit does not exist any more.
-        This will event will be called when a unit (or structure) dies.
+        This will event will be called when a unit (or structure, friendly or enemy) dies.
         For enemy units, this only works if the enemy unit was in vision on death.
 
         :param unit_tag:
