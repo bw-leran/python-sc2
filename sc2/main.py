@@ -192,6 +192,7 @@ async def _play_game_ai(client, player_id, ai, realtime, step_time_limit, game_t
 
     iteration = 0
     while True:
+        #add keyboard interrupt here!!!
         if iteration != 0:
             if realtime:
                 # On realtime=True, might get an error here: sc2.protocol.ProtocolError: ['Not in a game']
@@ -242,7 +243,7 @@ async def _play_game_ai(client, player_id, ai, realtime, step_time_limit, game_t
                 elif time_limit is None:
                     # Issue event like unit created or unit destroyed
                     await ai.issue_events()
-                    await ai.on_step(iteration)
+                    await ai.on_step(iteration) #add interrupt arg here!!!
                     await ai._after_step()
                 else:
                     out_of_budget = False
