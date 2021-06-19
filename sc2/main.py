@@ -1,3 +1,6 @@
+#bw-leran added imports
+import keyboard
+
 import asyncio
 from aiohttp import ClientWebSocketResponse, ClientSession
 import time
@@ -194,7 +197,12 @@ async def _play_game_ai(client, player_id, ai, realtime, step_time_limit, game_t
     # Only used in realtime=True
     previous_state_observation = None
     while True:
-        #add keyboard interrupt here!!!
+
+        #add keyboard interrupt here!!! - bw-leran
+        interrupt = False
+        if keyboard.is_pressed('c'):
+            interrupt = True
+
         if iteration != 0:
             if realtime:
                 # On realtime=True, might get an error here: sc2.protocol.ProtocolError: ['Not in a game']
@@ -235,7 +243,9 @@ async def _play_game_ai(client, player_id, ai, realtime, step_time_limit, game_t
             if realtime:
                 # Issue event like unit created or unit destroyed
                 await ai.issue_events()
-                await ai.on_step(iteration)
+
+                await ai.on_step(iteration) #not sure if need to add interrupt here - bw-leran
+                
                 await ai._after_step()
             else:
                 if time_penalty_cooldown > 0:
@@ -245,7 +255,9 @@ async def _play_game_ai(client, player_id, ai, realtime, step_time_limit, game_t
                 elif time_limit is None:
                     # Issue event like unit created or unit destroyed
                     await ai.issue_events()
-                    await ai.on_step(iteration) #add interrupt arg here!!!
+
+                    await ai.on_step(iteration,interrupt) #add interrupt arg here!!! - bw-leran
+
                     await ai._after_step()
                 else:
                     out_of_budget = False
