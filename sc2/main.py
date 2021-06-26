@@ -275,7 +275,7 @@ async def _play_game_ai(client, player_id, ai, realtime, step_time_limit, game_t
                         try:
                             async with async_timeout.timeout(budget):
                                 await ai.issue_events()
-                                await ai.on_step(iteration)
+                                await ai.on_step(iteration,interrupt)
                         except asyncio.TimeoutError:
                             step_time = time.monotonic() - step_start
                             logger.warning(
