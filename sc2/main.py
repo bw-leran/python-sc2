@@ -244,7 +244,7 @@ async def _play_game_ai(client, player_id, ai, realtime, step_time_limit, game_t
                 # Issue event like unit created or unit destroyed
                 await ai.issue_events()
 
-                await ai.on_step(iteration) #not sure if need to add interrupt here - bw-leran
+                await ai.on_step(iteration,interrupt) #not sure if need to add interrupt here - bw-leran
                 
                 await ai._after_step()
             else:
