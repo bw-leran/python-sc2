@@ -54,6 +54,8 @@ class GameMatch:
     sc2_config: List[Dict] = None
     game_time_limit: int = None
 
+    interrupt = False
+
     def __post_init__(self):
         # avoid players sharing names
         if len(self.players) > 1 and self.players[0].name is not None and self.players[0].name == self.players[1].name:
@@ -353,7 +355,7 @@ async def _play_game(
     return result
 
 
-async def _play_replay(client, ai, realtime=False, player_id=0):
+async def _play_replay(client, ai, realtime=False, player_id=0, interrupt=False):
     ai._initialize_variables()
 
     game_data = await client.get_game_data()
@@ -411,7 +413,7 @@ async def _play_replay(client, ai, realtime=False, player_id=0):
         try:
             # Issue event like unit created or unit destroyed
             await ai.issue_events()
-            await ai.on_step(iteration)
+            await ai.on_step(iteration,interrupt)
             await ai._after_step()
 
         except Exception as e:
