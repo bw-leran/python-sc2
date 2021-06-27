@@ -199,136 +199,402 @@ async def _play_game_ai(client, player_id, ai, realtime, step_time_limit, game_t
     # Only used in realtime=True
     previous_state_observation = None
     while True:
-        #add keyboard interrupt here!!! - bw-leran
-        interrupt = False
-        if keyboard.is_pressed('c'):
-            interrupt = True
-
-        if iteration != 0:
-            if realtime:
-                # On realtime=True, might get an error here: sc2.protocol.ProtocolError: ['Not in a game']
-                try:
-                    requested_step = gs.game_loop + client.game_step
-                    state = await client.observation(requested_step)
-                    # If the bot took too long in the previous observation, request another observation one frame after
-                    if state.observation.observation.game_loop > requested_step:
-                        logger.debug(f"Skipped a step in realtime=True")
-                        previous_state_observation = state.observation
-                        state = await client.observation(state.observation.observation.game_loop + 1)
-                except ProtocolError:
-                    pass
-            else:
-                state = await client.observation()
-            # check game result every time we get the observation
-            if client._game_result:
-                try:
-                    await ai.on_end(client._game_result[player_id])
-                except TypeError as error:
-                    # print(f"caught type error {error}")
-                    # print(f"return {client._game_result[player_id]}")
-                    return client._game_result[player_id]
-                return client._game_result[player_id]
-            gs = GameState(state.observation, previous_state_observation)
-            previous_state_observation = None
-            logger.debug(f"Score: {gs.score.score}")
-
-            if game_time_limit and (gs.game_loop * 0.725 * (1 / 16)) > game_time_limit:
-                await ai.on_end(Result.Tie)
-                return Result.Tie
-            proto_game_info = await client._execute(game_info=sc_pb.RequestGameInfo())
-            ai._prepare_step(gs, proto_game_info)
-
-        logger.debug(f"Running AI step, it={iteration} {gs.game_loop * 0.725 * (1 / 16):.2f}s")
-
         try:
-            if realtime:
-                # Issue event like unit created or unit destroyed
-                await ai.issue_events()
+            while True:
+                #add keyboard interrupt here!!! - bw-leran
+                interrupt = False
+                #if keyboard.is_pressed('c'):
+                #    interrupt = True
 
-                await ai.on_step(iteration,interrupt) #add interrupt arg here - bw-leran test commmit
-                
-                await ai._after_step()
-            else:
-                if time_penalty_cooldown > 0:
-                    time_penalty_cooldown -= 1
-                    logger.warning(f"Running AI step: penalty cooldown: {time_penalty_cooldown}")
-                    iteration -= 1  # Do not increment the iteration on this round
-                elif time_limit is None:
+                if iteration != 0:
+                    if realtime:
+                        # On realtime=True, might get an error here: sc2.protocol.ProtocolError: ['Not in a game']
+                        try:
+                            requested_step = gs.game_loop + client.game_step
+                            state = await client.observation(requested_step)
+                            # If the bot took too long in the previous observation, request another observation one frame after
+                            if state.observation.observation.game_loop > requested_step:
+                                logger.debug(f"Skipped a step in realtime=True")
+                                previous_state_observation = state.observation
+                                state = await client.observation(state.observation.observation.game_loop + 1)
+                        except ProtocolError:
+                            pass
+                    else:
+                        state = await client.observation()
+                    # check game result every time we get the observation
+                    if client._game_result:
+                        try:
+                            await ai.on_end(client._game_result[player_id])
+                        except TypeError as error:
+                            # print(f"caught type error {error}")
+                            # print(f"return {client._game_result[player_id]}")
+                            return client._game_result[player_id]
+                        return client._game_result[player_id]
+                    gs = GameState(state.observation, previous_state_observation)
+                    previous_state_observation = None
+                    logger.debug(f"Score: {gs.score.score}")
+
+                    if game_time_limit and (gs.game_loop * 0.725 * (1 / 16)) > game_time_limit:
+                        await ai.on_end(Result.Tie)
+                        return Result.Tie
+                    proto_game_info = await client._execute(game_info=sc_pb.RequestGameInfo())
+                    ai._prepare_step(gs, proto_game_info)
+
+                logger.debug(f"Running AI step, it={iteration} {gs.game_loop * 0.725 * (1 / 16):.2f}s")
+
+                try:
+                    if realtime:
+                        # Issue event like unit created or unit destroyed
+                        await ai.issue_events()
+
+                        await ai.on_step(iteration,interrupt) #add interrupt arg here - bw-leran test commmit
+
+                        await ai._after_step()
+                    else:
+                        if time_penalty_cooldown > 0:
+                            time_penalty_cooldown -= 1
+                            logger.warning(f"Running AI step: penalty cooldown: {time_penalty_cooldown}")
+                            iteration -= 1  # Do not increment the iteration on this round
+                        elif time_limit is None:
+                            # Issue event like unit created or unit destroyed
+                            await ai.issue_events()
+
+                            await ai.on_step(iteration,interrupt) #add interrupt arg here!!! - bw-leran
+
+                            await ai._after_step()
+                        else:
+                            out_of_budget = False
+                            budget = time_limit - time_window.available
+
+                            # Tell the bot how much time it has left attribute
+                            ai.time_budget_available = budget
+
+                            if budget < 0:
+                                logger.warning(f"Running AI step: out of budget before step")
+                                step_time = 0.0
+                                out_of_budget = True
+                            else:
+                                step_start = time.monotonic()
+                                try:
+                                    async with async_timeout.timeout(budget):
+                                        await ai.issue_events()
+                                        await ai.on_step(iteration,interrupt)
+                                except asyncio.TimeoutError:
+                                    step_time = time.monotonic() - step_start
+                                    logger.warning(
+                                        f"Running AI step: out of budget; "
+                                        + f"budget={budget:.2f}, steptime={step_time:.2f}, "
+                                        + f"window={time_window.available_fmt}"
+                                    )
+                                    out_of_budget = True
+                                step_time = time.monotonic() - step_start
+
+                            time_window.push(step_time)
+
+                            if out_of_budget and time_penalty is not None:
+                                if time_penalty == "resign":
+                                    raise RuntimeError("Out of time")
+                                else:
+                                    time_penalty_cooldown = int(time_penalty)
+                                    time_window.clear()
+
+                            await ai._after_step()
+                except Exception as e:
+                    if isinstance(e, ProtocolError) and e.is_game_over_error:
+                        if realtime:
+                            return None
+                        result = client._game_result[player_id]
+                        if result is None:
+                            logger.error("Game over, but no results gathered")
+                            raise
+                        await ai.on_end(result)
+                        return result
+                    # NOTE: this message is caught by pytest suite
+                    logger.exception(f"AI step threw an error")  # DO NOT EDIT!
+                    logger.error(f"Error: {e}")
+                    logger.error(f"Resigning due to previous error")
+                    try:
+                        await ai.on_end(Result.Defeat)
+                    except TypeError as error:
+                        # print(f"caught type error {error}")
+                        # print(f"return {Result.Defeat}")
+                        return Result.Defeat
+                    return Result.Defeat
+
+                logger.debug(f"Running AI step: done")
+
+                if not realtime:
+                    if not client.in_game:  # Client left (resigned) the game
+                        await ai.on_end(client._game_result[player_id])
+                        return client._game_result[player_id]
+
+                    await client.step()
+
+                iteration += 1
+        except KeyboardInterrupt:
+
+            # add keyboard interrupt here!!! - bw-leran
+            interrupt = True
+            # if keyboard.is_pressed('c'):
+            #    interrupt = True
+
+            if iteration != 0:
+                if realtime:
+                    # On realtime=True, might get an error here: sc2.protocol.ProtocolError: ['Not in a game']
+                    try:
+                        requested_step = gs.game_loop + client.game_step
+                        state = await client.observation(requested_step)
+                        # If the bot took too long in the previous observation, request another observation one frame after
+                        if state.observation.observation.game_loop > requested_step:
+                            logger.debug(f"Skipped a step in realtime=True")
+                            previous_state_observation = state.observation
+                            state = await client.observation(state.observation.observation.game_loop + 1)
+                    except ProtocolError:
+                        pass
+                else:
+                    state = await client.observation()
+                # check game result every time we get the observation
+                if client._game_result:
+                    try:
+                        await ai.on_end(client._game_result[player_id])
+                    except TypeError as error:
+                        # print(f"caught type error {error}")
+                        # print(f"return {client._game_result[player_id]}")
+                        return client._game_result[player_id]
+                    return client._game_result[player_id]
+                gs = GameState(state.observation, previous_state_observation)
+                previous_state_observation = None
+                logger.debug(f"Score: {gs.score.score}")
+
+                if game_time_limit and (gs.game_loop * 0.725 * (1 / 16)) > game_time_limit:
+                    await ai.on_end(Result.Tie)
+                    return Result.Tie
+                proto_game_info = await client._execute(game_info=sc_pb.RequestGameInfo())
+                ai._prepare_step(gs, proto_game_info)
+
+            logger.debug(f"Running AI step, it={iteration} {gs.game_loop * 0.725 * (1 / 16):.2f}s")
+
+            try:
+                if realtime:
                     # Issue event like unit created or unit destroyed
                     await ai.issue_events()
 
-                    await ai.on_step(iteration,interrupt) #add interrupt arg here!!! - bw-leran
+                    await ai.on_step(iteration, interrupt)  # add interrupt arg here - bw-leran test commmit
 
                     await ai._after_step()
                 else:
-                    out_of_budget = False
-                    budget = time_limit - time_window.available
+                    if time_penalty_cooldown > 0:
+                        time_penalty_cooldown -= 1
+                        logger.warning(f"Running AI step: penalty cooldown: {time_penalty_cooldown}")
+                        iteration -= 1  # Do not increment the iteration on this round
+                    elif time_limit is None:
+                        # Issue event like unit created or unit destroyed
+                        await ai.issue_events()
 
-                    # Tell the bot how much time it has left attribute
-                    ai.time_budget_available = budget
+                        await ai.on_step(iteration, interrupt)  # add interrupt arg here!!! - bw-leran
 
-                    if budget < 0:
-                        logger.warning(f"Running AI step: out of budget before step")
-                        step_time = 0.0
-                        out_of_budget = True
+                        await ai._after_step()
                     else:
-                        step_start = time.monotonic()
-                        try:
-                            async with async_timeout.timeout(budget):
-                                await ai.issue_events()
-                                await ai.on_step(iteration,interrupt)
-                        except asyncio.TimeoutError:
-                            step_time = time.monotonic() - step_start
-                            logger.warning(
-                                f"Running AI step: out of budget; "
-                                + f"budget={budget:.2f}, steptime={step_time:.2f}, "
-                                + f"window={time_window.available_fmt}"
-                            )
+                        out_of_budget = False
+                        budget = time_limit - time_window.available
+
+                        # Tell the bot how much time it has left attribute
+                        ai.time_budget_available = budget
+
+                        if budget < 0:
+                            logger.warning(f"Running AI step: out of budget before step")
+                            step_time = 0.0
                             out_of_budget = True
-                        step_time = time.monotonic() - step_start
-
-                    time_window.push(step_time)
-
-                    if out_of_budget and time_penalty is not None:
-                        if time_penalty == "resign":
-                            raise RuntimeError("Out of time")
                         else:
-                            time_penalty_cooldown = int(time_penalty)
-                            time_window.clear()
+                            step_start = time.monotonic()
+                            try:
+                                async with async_timeout.timeout(budget):
+                                    await ai.issue_events()
+                                    await ai.on_step(iteration, interrupt)
+                            except asyncio.TimeoutError:
+                                step_time = time.monotonic() - step_start
+                                logger.warning(
+                                    f"Running AI step: out of budget; "
+                                    + f"budget={budget:.2f}, steptime={step_time:.2f}, "
+                                    + f"window={time_window.available_fmt}"
+                                )
+                                out_of_budget = True
+                            step_time = time.monotonic() - step_start
 
-                    await ai._after_step()
-        except Exception as e:
-            if isinstance(e, ProtocolError) and e.is_game_over_error:
-                if realtime:
-                    return None
-                result = client._game_result[player_id]
-                if result is None:
-                    logger.error("Game over, but no results gathered")
-                    raise
-                await ai.on_end(result)
-                return result
-            # NOTE: this message is caught by pytest suite
-            logger.exception(f"AI step threw an error")  # DO NOT EDIT!
-            logger.error(f"Error: {e}")
-            logger.error(f"Resigning due to previous error")
-            try:
-                await ai.on_end(Result.Defeat)
-            except TypeError as error:
-                # print(f"caught type error {error}")
-                # print(f"return {Result.Defeat}")
+                        time_window.push(step_time)
+
+                        if out_of_budget and time_penalty is not None:
+                            if time_penalty == "resign":
+                                raise RuntimeError("Out of time")
+                            else:
+                                time_penalty_cooldown = int(time_penalty)
+                                time_window.clear()
+
+                        await ai._after_step()
+            except Exception as e:
+                if isinstance(e, ProtocolError) and e.is_game_over_error:
+                    if realtime:
+                        return None
+                    result = client._game_result[player_id]
+                    if result is None:
+                        logger.error("Game over, but no results gathered")
+                        raise
+                    await ai.on_end(result)
+                    return result
+                # NOTE: this message is caught by pytest suite
+                logger.exception(f"AI step threw an error")  # DO NOT EDIT!
+                logger.error(f"Error: {e}")
+                logger.error(f"Resigning due to previous error")
+                try:
+                    await ai.on_end(Result.Defeat)
+                except TypeError as error:
+                    # print(f"caught type error {error}")
+                    # print(f"return {Result.Defeat}")
+                    return Result.Defeat
                 return Result.Defeat
-            return Result.Defeat
 
-        logger.debug(f"Running AI step: done")
+            logger.debug(f"Running AI step: done")
 
-        if not realtime:
-            if not client.in_game:  # Client left (resigned) the game
-                await ai.on_end(client._game_result[player_id])
-                return client._game_result[player_id]
+            if not realtime:
+                if not client.in_game:  # Client left (resigned) the game
+                    await ai.on_end(client._game_result[player_id])
+                    return client._game_result[player_id]
 
-            await client.step()
+                await client.step()
 
-        iteration += 1
+            iteration += 1
+
+            while True:
+                # add keyboard interrupt here!!! - bw-leran
+                interrupt = False
+                # if keyboard.is_pressed('c'):
+                #    interrupt = True
+
+                if iteration != 0:
+                    if realtime:
+                        # On realtime=True, might get an error here: sc2.protocol.ProtocolError: ['Not in a game']
+                        try:
+                            requested_step = gs.game_loop + client.game_step
+                            state = await client.observation(requested_step)
+                            # If the bot took too long in the previous observation, request another observation one frame after
+                            if state.observation.observation.game_loop > requested_step:
+                                logger.debug(f"Skipped a step in realtime=True")
+                                previous_state_observation = state.observation
+                                state = await client.observation(state.observation.observation.game_loop + 1)
+                        except ProtocolError:
+                            pass
+                    else:
+                        state = await client.observation()
+                    # check game result every time we get the observation
+                    if client._game_result:
+                        try:
+                            await ai.on_end(client._game_result[player_id])
+                        except TypeError as error:
+                            # print(f"caught type error {error}")
+                            # print(f"return {client._game_result[player_id]}")
+                            return client._game_result[player_id]
+                        return client._game_result[player_id]
+                    gs = GameState(state.observation, previous_state_observation)
+                    previous_state_observation = None
+                    logger.debug(f"Score: {gs.score.score}")
+
+                    if game_time_limit and (gs.game_loop * 0.725 * (1 / 16)) > game_time_limit:
+                        await ai.on_end(Result.Tie)
+                        return Result.Tie
+                    proto_game_info = await client._execute(game_info=sc_pb.RequestGameInfo())
+                    ai._prepare_step(gs, proto_game_info)
+
+                logger.debug(f"Running AI step, it={iteration} {gs.game_loop * 0.725 * (1 / 16):.2f}s")
+
+                try:
+                    if realtime:
+                        # Issue event like unit created or unit destroyed
+                        await ai.issue_events()
+
+                        await ai.on_step(iteration, interrupt)  # add interrupt arg here - bw-leran test commmit
+
+                        await ai._after_step()
+                    else:
+                        if time_penalty_cooldown > 0:
+                            time_penalty_cooldown -= 1
+                            logger.warning(f"Running AI step: penalty cooldown: {time_penalty_cooldown}")
+                            iteration -= 1  # Do not increment the iteration on this round
+                        elif time_limit is None:
+                            # Issue event like unit created or unit destroyed
+                            await ai.issue_events()
+
+                            await ai.on_step(iteration, interrupt)  # add interrupt arg here!!! - bw-leran
+
+                            await ai._after_step()
+                        else:
+                            out_of_budget = False
+                            budget = time_limit - time_window.available
+
+                            # Tell the bot how much time it has left attribute
+                            ai.time_budget_available = budget
+
+                            if budget < 0:
+                                logger.warning(f"Running AI step: out of budget before step")
+                                step_time = 0.0
+                                out_of_budget = True
+                            else:
+                                step_start = time.monotonic()
+                                try:
+                                    async with async_timeout.timeout(budget):
+                                        await ai.issue_events()
+                                        await ai.on_step(iteration, interrupt)
+                                except asyncio.TimeoutError:
+                                    step_time = time.monotonic() - step_start
+                                    logger.warning(
+                                        f"Running AI step: out of budget; "
+                                        + f"budget={budget:.2f}, steptime={step_time:.2f}, "
+                                        + f"window={time_window.available_fmt}"
+                                    )
+                                    out_of_budget = True
+                                step_time = time.monotonic() - step_start
+
+                            time_window.push(step_time)
+
+                            if out_of_budget and time_penalty is not None:
+                                if time_penalty == "resign":
+                                    raise RuntimeError("Out of time")
+                                else:
+                                    time_penalty_cooldown = int(time_penalty)
+                                    time_window.clear()
+
+                            await ai._after_step()
+                except Exception as e:
+                    if isinstance(e, ProtocolError) and e.is_game_over_error:
+                        if realtime:
+                            return None
+                        result = client._game_result[player_id]
+                        if result is None:
+                            logger.error("Game over, but no results gathered")
+                            raise
+                        await ai.on_end(result)
+                        return result
+                    # NOTE: this message is caught by pytest suite
+                    logger.exception(f"AI step threw an error")  # DO NOT EDIT!
+                    logger.error(f"Error: {e}")
+                    logger.error(f"Resigning due to previous error")
+                    try:
+                        await ai.on_end(Result.Defeat)
+                    except TypeError as error:
+                        # print(f"caught type error {error}")
+                        # print(f"return {Result.Defeat}")
+                        return Result.Defeat
+                    return Result.Defeat
+
+                logger.debug(f"Running AI step: done")
+
+                if not realtime:
+                    if not client.in_game:  # Client left (resigned) the game
+                        await ai.on_end(client._game_result[player_id])
+                        return client._game_result[player_id]
+
+                    await client.step()
+
+                iteration += 1
 
 
 async def _play_game(
