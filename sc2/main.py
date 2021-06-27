@@ -203,8 +203,6 @@ async def _play_game_ai(client, player_id, ai, realtime, step_time_limit, game_t
             while True:
                 #add keyboard interrupt here!!! - bw-leran
                 interrupt = False
-                #if keyboard.is_pressed('c'):
-                #    interrupt = True
 
                 if iteration != 0:
                     if realtime:
@@ -247,8 +245,7 @@ async def _play_game_ai(client, player_id, ai, realtime, step_time_limit, game_t
                         # Issue event like unit created or unit destroyed
                         await ai.issue_events()
 
-                        await ai.on_step(iteration,interrupt) #add interrupt arg here - bw-leran test commmit
-
+                        await ai.on_step(iteration,interrupt) #add interrupt arg here - bw-leran
                         await ai._after_step()
                     else:
                         if time_penalty_cooldown > 0:
