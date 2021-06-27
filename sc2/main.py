@@ -199,7 +199,6 @@ async def _play_game_ai(client, player_id, ai, realtime, step_time_limit, game_t
     # Only used in realtime=True
     previous_state_observation = None
     while True:
-        print('test')
         #add keyboard interrupt here!!! - bw-leran
         interrupt = False
         if keyboard.is_pressed('c'):
