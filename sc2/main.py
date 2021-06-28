@@ -213,11 +213,17 @@ async def _play_game_ai(client, player_id, ai, realtime, step_time_limit, game_t
                             logger.debug(f"Skipped a step in realtime=True")
                             previous_state_observation = state.observation
                             state = await client.observation(state.observation.observation.game_loop + 1)
+                    except KeyboardInterrupt:
+                        interrupt = True
+                        break
                     except ProtocolError:
                         pass
                     if client._game_result:
                         try:
                             await ai.on_end(client._game_result[player_id])
+                        except KeyboardInterrupt:
+                            interrupt = True
+                            break
                         except TypeError as error:
                             # print(f"caught type error {error}")
                             # print(f"return {client._game_result[player_id]}")
@@ -240,6 +246,10 @@ async def _play_game_ai(client, player_id, ai, realtime, step_time_limit, game_t
                     await ai.on_step(iteration,interrupt) #add interrupt arg here - bw-leran
                     await ai._after_step()
 
+                except KeyboardInterrupt:
+                    interrupt = True
+                    break
+
                 except Exception as e:
                     if isinstance(e, ProtocolError) and e.is_game_over_error:
                         if realtime:
@@ -256,6 +266,9 @@ async def _play_game_ai(client, player_id, ai, realtime, step_time_limit, game_t
                     logger.error(f"Resigning due to previous error")
                     try:
                         await ai.on_end(Result.Defeat)
+                    except KeyboardInterrupt:
+                        interrupt = True
+                        break
                     except TypeError as error:
                         # print(f"caught type error {error}")
                         # print(f"return {Result.Defeat}")
