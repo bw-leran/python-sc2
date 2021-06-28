@@ -199,6 +199,80 @@ async def _play_game_ai(client, player_id, ai, realtime, step_time_limit, game_t
     # Only used in realtime=True
     previous_state_observation = None
     interrupt = False
+
+    while True:
+        try:
+            while True:
+
+                if iteration != 0:
+                    try:
+                        requested_step = gs.game_loop + client.game_step
+                        state = await client.observation(requested_step)
+                        # If the bot took too long in the previous observation, request another observation one frame after
+                        if state.observation.observation.game_loop > requested_step:
+                            logger.debug(f"Skipped a step in realtime=True")
+                            previous_state_observation = state.observation
+                            state = await client.observation(state.observation.observation.game_loop + 1)
+                    except ProtocolError:
+                        pass
+                    if client._game_result:
+                        try:
+                            await ai.on_end(client._game_result[player_id])
+                        except TypeError as error:
+                            # print(f"caught type error {error}")
+                            # print(f"return {client._game_result[player_id]}")
+                            return client._game_result[player_id]
+                        return client._game_result[player_id]
+                    gs = GameState(state.observation, previous_state_observation)
+                    previous_state_observation = None
+                    logger.debug(f"Score: {gs.score.score}")
+
+                    if game_time_limit and (gs.game_loop * 0.725 * (1 / 16)) > game_time_limit:
+                        await ai.on_end(Result.Tie)
+                        return Result.Tie
+                    proto_game_info = await client._execute(game_info=sc_pb.RequestGameInfo())
+                    ai._prepare_step(gs, proto_game_info)
+
+                logger.debug(f"Running AI step, it={iteration} {gs.game_loop * 0.725 * (1 / 16):.2f}s")
+
+                try:
+                    await ai.issue_events()
+                    await ai.on_step(iteration,interrupt) #add interrupt arg here - bw-leran
+                    await ai._after_step()
+
+                except Exception as e:
+                    if isinstance(e, ProtocolError) and e.is_game_over_error:
+                        if realtime:
+                            return None
+                        result = client._game_result[player_id]
+                        if result is None:
+                            logger.error("Game over, but no results gathered")
+                            raise
+                        await ai.on_end(result)
+                        return result
+                    # NOTE: this message is caught by pytest suite
+                    logger.exception(f"AI step threw an error")  # DO NOT EDIT!
+                    logger.error(f"Error: {e}")
+                    logger.error(f"Resigning due to previous error")
+                    try:
+                        await ai.on_end(Result.Defeat)
+                    except TypeError as error:
+                        # print(f"caught type error {error}")
+                        # print(f"return {Result.Defeat}")
+                        return Result.Defeat
+                    return Result.Defeat
+
+                logger.debug(f"Running AI step: done")
+
+                iteration += 1
+
+                if interrupt:
+                    interrupt = False
+
+        except KeyboardInterrupt:
+            interrupt = True
+
+'''
     while True:
         try:
             while True:
@@ -333,7 +407,8 @@ async def _play_game_ai(client, player_id, ai, realtime, step_time_limit, game_t
 
         except KeyboardInterrupt:
             interrupt = True
-
+            
+'''
 
 async def _play_game(
     player, client: Client, realtime, portconfig, step_time_limit=None, game_time_limit=None, rgb_render_config=None
